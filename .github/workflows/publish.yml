@@ -41,10 +41,14 @@ jobs:
           git add out/ cursor.txt
           git commit -m "카드 생성: $(date -u -d '+9 hours' +%Y-%m-%d)" || echo "변경 사항 없음"
           git push
-
       - name: 인스타그램 발행
-        if: ${{ secrets.IG_TOKEN != '' }}
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_TOKEN:   ${{ secrets.IG_TOKEN }}
-        run: python publish.py
+        run: |
+          if [ -z "$IG_TOKEN" ]; then
+            echo "토큰이 아직 없어 발행을 건너뜁니다."
+            exit 0
+          fi
+          python publish.py
+
