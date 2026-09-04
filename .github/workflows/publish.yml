@@ -1,0 +1,49 @@
+name: 매일 말씀 카드 발행
+
+on:
+  schedule:
+    # GitHub Actions 는 UTC 기준입니다. 23:00 UTC = 한국시간 다음날 오전 8시
+    - cron: '0 23 * * *'
+  workflow_dispatch:        # 수동 실행 버튼
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # 생성된 카드를 저장소에 커밋하기 위해 필요
+
+    steps:
+      - name: 저장소 가져오기
+        uses: actions/checkout@v4
+
+      - name: 파이썬 준비
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: 한글 폰트 설치
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y fonts-noto-cjk fonts-noto-cjk-extra
+
+      - name: 의존성 설치
+        run: |
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: 카드 생성
+        run: python make_card.py
+
+      - name: 저장소에 카드 커밋
+        run: |
+          git config user.name  "bibledaily-bot"
+          git config user.email "actions@github.com"
+          git add out/ cursor.txt
+          git commit -m "카드 생성: $(date -u -d '+9 hours' +%Y-%m-%d)" || echo "변경 사항 없음"
+          git push
+
+      - name: 인스타그램 발행
+        env:
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          IG_TOKEN:   ${{ secrets.IG_TOKEN }}
+        run: python publish.py
