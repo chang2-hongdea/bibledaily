@@ -43,6 +43,7 @@ jobs:
           git push
 
       - name: 인스타그램 발행
+        if: ${{ secrets.IG_TOKEN != '' }}
         env:
           IG_USER_ID: ${{ secrets.IG_USER_ID }}
           IG_TOKEN:   ${{ secrets.IG_TOKEN }}
