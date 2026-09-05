@@ -2,27 +2,32 @@
 # -*- coding: utf-8 -*-
 """
 오늘 만든 카드를 인스타그램에 발행합니다.
+피드 게시물을 먼저 올리고, 이어서 같은 구절로 스토리를 올립니다.
 
 필요한 환경변수 (GitHub Secrets 로 등록)
   IG_USER_ID  : Instagram user_id
   IG_TOKEN    : 장기 액세스 토큰 (60일)
-  GITHUB_REPOSITORY : Actions 가 자동으로 넣어줍니다 (owner/repo)
 """
 
 import json, os, sys, time
-import urllib.parse, urllib.request
+import urllib.parse, urllib.request, urllib.error
 
-GRAPH   = "https://graph.instagram.com/v23.0"
-BRANCH  = os.environ.get("GITHUB_REF_NAME", "main")
+GRAPH  = "https://graph.instagram.com/v23.0"
+BRANCH = os.environ.get("GITHUB_REF_NAME", "main")
 
 HASHTAGS = "#말씀 #오늘의말씀 #성경말씀 #큐티 #묵상 #성경구절 #매일말씀"
+
+POST_STORY = True   # 스토리도 함께 올릴지. False 로 두면 피드만 올립니다.
 
 
 def post(url, data):
     body = urllib.parse.urlencode(data).encode()
     req  = urllib.request.Request(url, data=body, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"인스타 API 오류 {e.code}: {e.read().decode()[:500]}")
 
 
 def wait_until_public(url, tries=10, gap=15):
@@ -40,6 +45,23 @@ def wait_until_public(url, tries=10, gap=15):
     return False
 
 
+def publish(user_id, token, image_url, *, caption=None, story=False):
+    data = {"image_url": image_url, "access_token": token}
+    if story:
+        data["media_type"] = "STORIES"          # 스토리는 캡션이 없습니다
+    else:
+        data["caption"] = caption
+
+    container = post(f"{GRAPH}/{user_id}/media", data)
+    print(f"  컨테이너 생성: {container['id']}")
+    time.sleep(5)
+
+    result = post(f"{GRAPH}/{user_id}/media_publish", {
+        "creation_id": container["id"], "access_token": token})
+    print(f"  발행 완료: {result}")
+    return result
+
+
 def main():
     user_id = os.environ.get("IG_USER_ID")
     token   = os.environ.get("IG_TOKEN")
@@ -53,26 +75,33 @@ def main():
     with open("out/today.json", encoding="utf-8") as f:
         card = json.load(f)
 
-    image_url = f"https://raw.githubusercontent.com/{repo}/{BRANCH}/out/{card['file']}"
-    print(f"이미지 주소: {image_url}")
+    base      = f"https://raw.githubusercontent.com/{repo}/{BRANCH}/out"
+    feed_url  = f"{base}/{card['file']}"
+    story_url = f"{base}/{card['story']}" if card.get("story") else None
 
-    if not wait_until_public(image_url):
+    print(f"피드 이미지: {feed_url}")
+    if not wait_until_public(feed_url):
         sys.exit("이미지가 공개 주소에서 아직 안 보입니다. 잠시 후 다시 실행하세요.")
 
     caption = (f"{card['text']}\n"
                f"— {card['ref']} ({card['translation']})\n\n"
                f"{HASHTAGS}")
 
-    # ① 컨테이너 생성
-    container = post(f"{GRAPH}/{user_id}/media", {
-        "image_url": image_url, "caption": caption, "access_token": token})
-    print(f"컨테이너 생성: {container['id']}")
-    time.sleep(5)
+    print("[1/2] 피드 발행")
+    publish(user_id, token, feed_url, caption=caption)
 
-    # ② 발행
-    result = post(f"{GRAPH}/{user_id}/media_publish", {
-        "creation_id": container["id"], "access_token": token})
-    print(f"발행 완료: {result}")
+    if POST_STORY and story_url:
+        print(f"[2/2] 스토리 발행 — {story_url}")
+        if wait_until_public(story_url, tries=4, gap=10):
+            try:
+                publish(user_id, token, story_url, story=True)
+            except SystemExit as e:
+                # 스토리가 실패해도 피드는 이미 올라갔으므로 전체를 실패시키지 않습니다.
+                print(f"  스토리 발행 실패(피드는 정상): {e}")
+        else:
+            print("  스토리 이미지를 아직 못 읽어 건너뜁니다.")
+    else:
+        print("[2/2] 스토리 발행 안 함")
 
 
 if __name__ == "__main__":
