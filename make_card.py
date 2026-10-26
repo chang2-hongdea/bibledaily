@@ -13,35 +13,34 @@ import json, os, re
 from datetime import datetime, timezone, timedelta
 from playwright.sync_api import sync_playwright
 
-# ── 디자인 설정 ────────────────────────────────
-BG          = "#16211D"      # 배경 (딥그린)
-FG          = "#ECE5D8"      # 본문
-DIM         = "#8FA096"      # 구절 표기
-FOOT        = "#6E7F75"      # 하단
-HAIR        = "#3E4F47"      # 얇은 선
-DATE        = "#7E9387"      # 좌상단 날짜
+# ── 디자인 설정 (D 아카이브: 종이 카드 + 금색 책갈피) ─────────────
+# 평일은 paper, 주일은 navy. 색을 바꾸려면 여기만 고치면 됩니다.
+THEMES = {
+    "paper": dict(BG="#E9E1D3", CARD="#FBF8F2", INK="#1F2B45", MUTED="#9A8F7C",
+                  REFCOL="#B07F2A", DASH="#D8CDB8", RIBBON="#E3A63F", SHADOW="rgba(31,43,69,.14)"),
+    "navy":  dict(BG="#141C30", CARD="#1F2B45", INK="#F6EFE3", MUTED="#8D96AB",
+                  REFCOL="#E3A63F", DASH="#3A4766", RIBBON="#E3A63F", SHADOW="rgba(0,0,0,.35)"),
+}
+SUNDAY_THEME = "navy"        # 주일에도 종이로 두려면 "paper"
 
 HANDLE      = "@bibledaily_zip"
 TRANSLATION = "새번역"
+LABEL       = "TODAY'S VERSE"   # 왼쪽 위 작은 글씨
 
-# 피드 카드
-W,  H       = 1080, 1350
-FONT_MAX,   FONT_MIN   = 84, 46
-BOX_W,      BOX_H      = 888, 840
-REF_FS                 = 52   # 출처 표기 (요한복음 15 : 5)
-PAD_Y,      FOOT_Y     = 120, 88
-DATE_TOP,   DATE_LEFT  = 66, 84
-SHIFT_Y                = 44   # 본문 묶음을 아래로 내려 날짜와 거리를 둡니다
+# 본문 글꼴은 구글 웹 글꼴(고운바탕), 숫자·영문은 Gelasio. 못 받으면 Noto Serif 로 그립니다.
+FONTS_CSS = "https://fonts.googleapis.com/css2?family=Gowun+Batang:wght@400;700&family=Gelasio:wght@400&display=block"
 
-# 스토리 카드 — 위아래 320px 는 인스타 UI(프로필·답장창)에 가리므로 비워 둡니다
-SW, SH      = 1080, 1920
-S_FONT_MAX, S_FONT_MIN = 92, 50
-S_BOX_W,    S_BOX_H    = 880, 910
-S_REF_FS               = 58
-S_PAD_Y,    S_FOOT_Y   = 320, 300
-# 스토리는 위 320px 가 인스타 UI 에 가리므로 날짜를 그 아래에 둡니다
-S_DATE_TOP, S_DATE_LEFT = 348, 90
-S_SHIFT_Y              = 80
+# 피드 카드 (1080x1350). 좌표는 화면 왼쪽 위 기준 px.
+FEED = dict(W=1080, H=1350, CARD_X=90, CARD_Y=90, CARD_W=900, CARD_H=1170,
+            TEXT_X=170, TEXT_W=740, LABEL_Y=180, DATE_Y=222, DATE_FS=110,
+            BOX_TOP=400, BOX_BOTTOM=965, REF_Y=1004, REF_FS=32,
+            DASH_Y=1108, FOOT_Y=1138, FOOT_FS=26, FS_MAX=56, FS_MIN=40)
+
+# 스토리 카드 (1080x1920) — 위 320px·아래 300px 는 인스타 UI 에 가리므로 글은 그 사이에만 둡니다
+STORY = dict(W=1080, H=1920, CARD_X=90, CARD_Y=230, CARD_W=900, CARD_H=1460,
+             TEXT_X=170, TEXT_W=740, LABEL_Y=360, DATE_Y=402, DATE_FS=110,
+             BOX_TOP=600, BOX_BOTTOM=1370, REF_Y=1410, REF_FS=34,
+             DASH_Y=1520, FOOT_Y=1550, FOOT_FS=27, FS_MAX=62, FS_MIN=44)
 
 QUALITY     = 92             # 인스타 API 는 JPEG 만 허용
 # ──────────────────────────────────────────────
@@ -144,35 +143,54 @@ WRAP_JS = r"""
 })();
 """
 
-CARD = """<!doctype html><html><head><meta charset="utf-8"><style>
+CARD = """<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="{FONTS_CSS}">
+<style>
   *{{margin:0;padding:0;box-sizing:border-box}}
-  html,body{{width:{W}px;height:{H}px}}
-  body{{background:{BG};color:{FG};font-family:"Noto Serif CJK KR",serif;
-       -webkit-font-smoothing:antialiased}}
-  .wrap{{transform:translateY({SHIFT}px);height:100%;display:flex;flex-direction:column;align-items:center;
-        justify-content:center;padding:{PAD_Y}px 96px;text-align:center;position:relative}}
-  .ref{{font-family:"Noto Sans CJK KR",sans-serif;font-size:{REF_FS}px;
-       letter-spacing:.16em;color:{DIM}}}
-  .hair{{background:{HAIR};width:56px;height:1.5px;margin:38px 0 50px}}
-  #verse{{font-size:{FS}px;font-weight:500;line-height:1.78;letter-spacing:-.01em;
-         max-width:{BOX_W}px;word-break:keep-all}}
-  .date{{position:absolute;top:{DATE_TOP}px;left:{DATE_LEFT}px;text-align:left;
-        font-family:"Noto Sans CJK KR",sans-serif;color:{DATE};line-height:1.34}}
-  .date .y{{font-size:19px;letter-spacing:.42em}}
-  .date .d{{font-size:34px;letter-spacing:.02em;font-weight:500;margin-top:2px}}
-  .date .w{{font-size:18px;letter-spacing:.14em;opacity:.85}}
-  .foot{{position:absolute;bottom:{FOOT_Y}px;left:0;right:0;text-align:center;
-        font-family:"Noto Sans CJK KR",sans-serif;font-size:{FOOT_FS}px;
-        color:{FOOT};letter-spacing:.04em}}
+  html,body{{width:{W}px;height:{H}px;overflow:hidden}}
+  body{{background:{BG};color:{INK};position:relative;-webkit-font-smoothing:antialiased;
+       font-family:"Gowun Batang","Noto Serif CJK KR",serif}}
+  .card{{position:absolute;left:{CARD_X}px;top:{CARD_Y}px;width:{CARD_W}px;height:{CARD_H}px;
+        background:{CARD};border-radius:28px;box-shadow:0 18px 40px {SHADOW}}}
+  .ribbon{{position:absolute;left:{RIB_X}px;top:{CARD_Y}px;width:56px;height:150px;background:{RIBBON};
+          clip-path:polygon(0 0,100% 0,100% 100%,50% 82%,0 100%)}}
+  .latin{{font-family:Gelasio,Georgia,"Noto Serif",serif}}
+  .label{{position:absolute;left:{TEXT_X}px;top:{LABEL_Y}px;font-size:30px;letter-spacing:6px;color:{MUTED}}}
+  .date{{position:absolute;left:{DATE_X}px;top:{DATE_Y}px;font-size:{DATE_FS}px;line-height:1;color:{INK}}}
+  .date small{{font-family:"Gowun Batang","Noto Serif CJK KR",serif;font-size:34px;color:{MUTED};margin-left:22px;letter-spacing:2px}}
+  .box{{position:absolute;left:{TEXT_X}px;top:{BOX_TOP}px;width:{TEXT_W}px;height:{BOX_H}px;
+       display:flex;flex-direction:column;justify-content:flex-end}}
+  #verse{{font-size:{FS}px;font-weight:700;line-height:1.7;max-width:{TEXT_W}px;word-break:keep-all}}
+  .ref{{position:absolute;left:{TEXT_X}px;top:{REF_Y}px;font-size:{REF_FS}px;color:{REFCOL}}}
+  .dash{{position:absolute;left:{TEXT_X}px;top:{DASH_Y}px;width:{TEXT_W}px;border-top:2px dashed {DASH}}}
+  .foot{{position:absolute;left:{TEXT_X}px;top:{FOOT_Y}px;width:{TEXT_W}px;display:flex;justify-content:space-between;
+        font-size:{FOOT_FS}px;color:{MUTED}}}
 </style></head><body>
-  <div class="date"><div class="y">{D_Y}</div><div class="d">{D_MD}</div><div class="w">{D_W}</div></div>
-  <div class="wrap">
-    <div class="ref">{REF}</div>
-    <div class="hair"></div>
-    <div id="verse" data-text="{TEXT}"></div>
-    <div class="foot">{HANDLE} &nbsp;·&nbsp; {TRANSLATION}</div>
-  </div>
+  <div class="card"></div><div class="ribbon"></div>
+  <div class="label latin">{LABEL}</div>
+  <div class="date latin">{D_MD}<small>{D_W}</small></div>
+  <div class="box"><div id="verse" data-text="{TEXT}"></div></div>
+  <div class="ref">{REF}</div>
+  <div class="dash"></div>
+  <div class="foot"><span class="latin">{HANDLE}</span><span>{TRANSLATION}</span></div>
 </body></html>"""
+
+# 한글 웹 글꼴은 글자 묶음(unicode-range)별로 내려옵니다. 실제로 쓸 글자를 넘겨 받아 둔 뒤
+# 줄바꿈 폭을 재야 합니다. 글자 없이 받으면 일부 글자만 고운바탕으로 나와 굵기가 섞입니다.
+FONT_JS = r"""
+async () => {
+  const v = document.getElementById('verse').getAttribute('data-text');
+  const rest = document.body.innerText;
+  const all = Promise.all([
+    document.fonts.load('700 50px "Gowun Batang"', v),
+    document.fonts.load('400 32px "Gowun Batang"', rest || '가'),
+    document.fonts.load('400 30px Gelasio', rest || 'A'),
+  ]);
+  await Promise.race([all, new Promise(r => setTimeout(r, 15000))]);
+  await document.fonts.ready;
+  return document.fonts.check('700 50px "Gowun Batang"', v);
+}
+"""
 
 
 def esc(s):
@@ -189,26 +207,35 @@ def load_cursor(total):
         return 0
 
 
-def render(page, path, text, ref, dparts, *, w, h, fs_max, fs_min,
-           box_w, box_h, pad_y, foot_y, ref_fs, foot_fs, date_top, date_left, shift):
+def card_html(text, ref, dparts, theme, L, fs):
+    t = THEMES[theme]
+    return CARD.format(
+        FONTS_CSS=FONTS_CSS, W=L["W"], H=L["H"], FS=fs,
+        CARD_X=L["CARD_X"], CARD_Y=L["CARD_Y"], CARD_W=L["CARD_W"], CARD_H=L["CARD_H"],
+        RIB_X=L["CARD_X"] + L["CARD_W"] - 90 - 56,
+        TEXT_X=L["TEXT_X"], TEXT_W=L["TEXT_W"], DATE_X=L["TEXT_X"] - 4,
+        LABEL_Y=L["LABEL_Y"], DATE_Y=L["DATE_Y"], DATE_FS=L["DATE_FS"],
+        BOX_TOP=L["BOX_TOP"], BOX_H=L["BOX_BOTTOM"] - L["BOX_TOP"],
+        REF_Y=L["REF_Y"], REF_FS=L["REF_FS"], DASH_Y=L["DASH_Y"],
+        FOOT_Y=L["FOOT_Y"], FOOT_FS=L["FOOT_FS"],
+        LABEL=LABEL, D_MD=dparts[1], D_W=dparts[2],
+        REF=esc(ref), TEXT=esc(text), HANDLE=HANDLE, TRANSLATION=TRANSLATION, **t)
+
+
+def render(page, path, text, ref, dparts, theme, L):
     """글자 수에 맞춰 크기를 자동으로 줄여가며 한 장을 그립니다."""
     # 1차: 높이도 맞고 끊김도 깨끗한 가장 큰 크기를 찾는다
     # 2차: 그런 크기가 없으면 높이만 맞는 가장 큰 크기로 돌아간다
     # 줄바꿈이 깨끗한 것을 글자 크기보다 우선합니다.
-    # 1차 탐색은 fs_min 까지 끝까지 내려가며 깨끗한 배치를 찾습니다.
-    CLEAN_DROP = 10**6
+    box_h = L["BOX_BOTTOM"] - L["BOX_TOP"]
+    font_ok = None
     for require_clean in (True, False):
-        floor = max(fs_min, fs_max - CLEAN_DROP) if require_clean else fs_min
-        fs = fs_max
-        while fs >= floor:
-            page.set_viewport_size({"width": w, "height": h})
-            page.set_content(CARD.format(
-                W=w, H=h, BG=BG, FG=FG, DIM=DIM, FOOT=FOOT, HAIR=HAIR,
-                FS=fs, BOX_W=box_w, PAD_Y=pad_y, FOOT_Y=foot_y,
-                REF_FS=ref_fs, FOOT_FS=foot_fs, DATE=DATE,
-                DATE_TOP=date_top, DATE_LEFT=date_left, SHIFT=shift,
-                D_Y=dparts[0], D_MD=dparts[1], D_W=dparts[2],
-                REF=ref, TEXT=esc(text), HANDLE=HANDLE, TRANSLATION=TRANSLATION))
+        fs = L["FS_MAX"]
+        while fs >= L["FS_MIN"]:
+            page.set_viewport_size({"width": L["W"], "height": L["H"]})
+            page.set_content(card_html(text, ref, dparts, theme, L, fs))
+            ok = page.evaluate(FONT_JS)
+            font_ok = ok if font_ok is None else (font_ok and ok)
             page.evaluate(WRAP_JS)
             fits = page.evaluate(
                 "document.getElementById('verse').scrollHeight") <= box_h
@@ -217,9 +244,11 @@ def render(page, path, text, ref, dparts, *, w, h, fs_max, fs_min,
             if fits and (clean or not require_clean):
                 break
             fs -= 2
-        if fs >= floor:
+        if fs >= L["FS_MIN"]:
             break
     page.screenshot(path=path, type="jpeg", quality=QUALITY)
+    if not font_ok:
+        print("  ※ 고운바탕 글꼴을 다 받지 못해 일부를 Noto Serif 로 그렸습니다")
     return fs
 
 
@@ -232,34 +261,23 @@ def main():
     idx  = load_cursor(len(verses))
     item = verses[idx]
     text, ref = item["text"].strip(), item["ref"].strip()
-    ref_disp  = re.sub(r"\s*:\s*", " : ", ref)
 
     now   = datetime.now(KST)
     today = now.strftime("%Y-%m-%d")
     # 요일 표기를 바꾸려면 이 줄만 고치면 됩니다.
-    #   영문  → now.strftime("%A")        /  없이 → ""
+    #   영문  → now.strftime("%a").upper()  /  없이 → ""
     weekday = "월화수목금토일"[now.weekday()] + "요일"
     dparts = (now.strftime("%Y"), f"{now.month}.{now.day:02d}", weekday)
+    theme = SUNDAY_THEME if now.weekday() == 6 else "paper"
     feed_name  = f"{today}.jpg"
     story_name = f"{today}_story.jpg"
     os.makedirs("out", exist_ok=True)
 
     with sync_playwright() as p:
         browser = p.chromium.launch()
-        page = browser.new_page(viewport={"width": W, "height": H}, device_scale_factor=1)
-
-        fs1 = render(page, f"out/{feed_name}", text, ref_disp, dparts,
-                     w=W, h=H, fs_max=FONT_MAX, fs_min=FONT_MIN,
-                     box_w=BOX_W, box_h=BOX_H, pad_y=PAD_Y, foot_y=FOOT_Y,
-                     ref_fs=REF_FS, foot_fs=23, date_top=DATE_TOP, date_left=DATE_LEFT,
-                     shift=SHIFT_Y)
-
-        fs2 = render(page, f"out/{story_name}", text, ref_disp, dparts,
-                     w=SW, h=SH, fs_max=S_FONT_MAX, fs_min=S_FONT_MIN,
-                     box_w=S_BOX_W, box_h=S_BOX_H, pad_y=S_PAD_Y, foot_y=S_FOOT_Y,
-                     ref_fs=S_REF_FS, foot_fs=25, date_top=S_DATE_TOP, date_left=S_DATE_LEFT,
-                     shift=S_SHIFT_Y)
-
+        page = browser.new_page(viewport={"width": FEED["W"], "height": FEED["H"]}, device_scale_factor=1)
+        fs1 = render(page, f"out/{feed_name}", text, ref, dparts, theme, FEED)
+        fs2 = render(page, f"out/{story_name}", text, ref, dparts, theme, STORY)
         browser.close()
 
     with open("out/today.json", "w", encoding="utf-8") as f:
@@ -270,8 +288,8 @@ def main():
     with open("cursor.txt", "w", encoding="utf-8") as f:
         f.write(str((idx + 1) % len(verses)))
 
-    print(f"피드   : out/{feed_name}   ({ref}, 글자크기 {fs1}px)")
-    print(f"스토리 : out/{story_name}  ({ref}, 글자크기 {fs2}px)")
+    print(f"피드   : out/{feed_name}   ({ref}, 글자크기 {fs1}px, {theme})")
+    print(f"스토리 : out/{story_name}  ({ref}, 글자크기 {fs2}px, {theme})")
     print(f"순번 {idx} → 다음 {(idx + 1) % len(verses)}")
 
 
