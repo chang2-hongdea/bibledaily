@@ -1,0 +1,46 @@
+name: 인스타 토큰 연장
+
+# 인스타 장기 토큰은 60일이면 끊기고, 끊겨도 알림 없이 게시만 멈춥니다(2026-11-04 실제로 그랬습니다).
+# 매달 1일과 15일에 연장해 IG_TOKEN 시크릿을 새 값으로 바꿉니다. 실패하면 GitHub 이 메일을 보냅니다.
+#
+# 필요한 시크릿
+#   IG_TOKEN    : 인스타 장기 토큰 (이 작업이 갱신합니다)
+#   SECRETS_PAT : 이 저장소의 Secrets 읽기·쓰기 권한만 가진 GitHub 토큰
+#                 (기본 GITHUB_TOKEN 은 시크릿을 고칠 수 없습니다)
+
+on:
+  schedule:
+    - cron: '0 3 1,15 * *'   # 한국시간 낮 12시
+  workflow_dispatch:         # 수동 실행 버튼
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 토큰 연장 후 시크릿 교체
+        env:
+          IG_TOKEN: ${{ secrets.IG_TOKEN }}
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::SECRETS_PAT 시크릿이 없어 연장할 수 없습니다."
+            exit 1
+          fi
+          # 응답 본문에 토큰이 들어 있으므로 로그에 찍지 않습니다.
+          resp=$(curl -sS -G https://graph.instagram.com/refresh_access_token \
+            --data-urlencode grant_type=ig_refresh_token \
+            --data-urlencode "access_token=$IG_TOKEN")
+          new=$(printf '%s' "$resp" | python3 -c "import json,sys;print(json.load(sys.stdin).get('access_token',''))")
+          if [ -z "$new" ]; then
+            msg=$(printf '%s' "$resp" | python3 -c "import json,sys;print(json.load(sys.stdin).get('error',{}).get('message','알 수 없는 오류'))")
+            echo "::error::토큰 연장 실패: $msg"
+            exit 1
+          fi
+          echo "::add-mask::$new"
+          days=$(printf '%s' "$resp" | python3 -c "import json,sys;print(int(json.load(sys.stdin).get('expires_in',0))//86400)")
+          printf '%s' "$new" | gh secret set IG_TOKEN -R "$REPO"
+          echo "연장 완료. 남은 기간 약 ${days}일"
